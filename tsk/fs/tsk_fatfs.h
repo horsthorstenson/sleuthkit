@@ -159,6 +159,7 @@
 /**
  * \internal
  * Buffer size for conversion of exFAT UTF-16 strings to UTF-8 strings.
+ * Max file name length is 255 characters. 
  */
 #define FATFS_MAXNAMLEN_UTF8	1024
 

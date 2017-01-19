@@ -44,9 +44,13 @@ typedef struct {
     uint8_t expected_secondary_entry_count;
     uint8_t actual_secondary_entry_count;
     uint16_t expected_check_sum;
-    uint8_t expected_name_length;
-    uint8_t actual_name_length;
-    TSK_FS_NAME *fs_name;
+    uint8_t expected_name_length_bytes; // total size of the final file name in bytes
+    uint8_t actual_name_length_bytes; // @@@_747: This needs clarification if it is the number
+                                        // of bytes read so far from the exfat entries or the number
+                                        // of bytes written into fs_name.  It is being used for both
+                                        // now and that is a problem because one is UTF-16 and the other is
+                                        // utf-8
+    TSK_FS_NAME *fs_name;   // name structure that we add data to as we parse entries.
     TSK_FS_DIR *fs_dir;
 } EXFATFS_FS_NAME_INFO;
 
@@ -69,8 +73,8 @@ exfatfs_reset_name_info(EXFATFS_FS_NAME_INFO *a_name_info)
     a_name_info->expected_secondary_entry_count = 0;
     a_name_info->actual_secondary_entry_count = 0;
     a_name_info->expected_check_sum = 0;
-    a_name_info->expected_name_length = 0;
-    a_name_info->actual_name_length = 0;
+    a_name_info->expected_name_length_bytes = 0;
+    a_name_info->actual_name_length_bytes = 0;
     a_name_info->fs_name->name[0] = '\0';
     a_name_info->fs_name->meta_addr = 0;
     a_name_info->fs_name->type = TSK_FS_NAME_TYPE_UNDEF;
@@ -212,7 +216,7 @@ exfats_parse_file_stream_dentry(EXFATFS_FS_NAME_INFO *a_name_info, FATFS_DENTRY 
         (EXFATFS_DIR_ENTRY_TYPE)dentry->entry_type;
 
     /* The file stream entry contains the length of the file name. */
-    a_name_info->expected_name_length = dentry->file_name_length;
+    a_name_info->expected_name_length_bytes = dentry->file_name_length_bytes;
 
     /* If all of the secondary entries for the set are present, save the name,
      * if any. Note that if this condition is satisfied here, the directory is
@@ -238,7 +242,7 @@ static void
 exfats_parse_file_name_dentry(EXFATFS_FS_NAME_INFO *a_name_info, FATFS_DENTRY *a_dentry, TSK_INUM_T a_inum)
 {
     EXFATFS_FILE_NAME_DIR_ENTRY *dentry = (EXFATFS_FILE_NAME_DIR_ENTRY*)a_dentry;
-    size_t num_chars_to_copy = 0;
+    size_t num_bytes_to_copy = 0;
 
     assert(a_name_info != NULL);
     assert(a_name_info->fatfs != NULL);
@@ -273,33 +277,39 @@ exfats_parse_file_name_dentry(EXFATFS_FS_NAME_INFO *a_name_info, FATFS_DENTRY *a
     a_name_info->last_dentry_type = 
         (EXFATFS_DIR_ENTRY_TYPE)dentry->entry_type;
 
-    /* Determine how many name chars remain according to the name length from
-     * the file stream entry and how many chars can be obtained from this
-     * name entry. */
-    num_chars_to_copy = a_name_info->expected_name_length - a_name_info->actual_name_length;
-    if (num_chars_to_copy > EXFATFS_MAX_FILE_NAME_SEGMENT_LENGTH) {
-        num_chars_to_copy = EXFATFS_MAX_FILE_NAME_SEGMENT_LENGTH;
+    /* Determine how many bytes we should be able to copy from this structure. */
+    num_bytes_to_copy = a_name_info->expected_name_length_bytes - a_name_info->actual_name_length_bytes;
+    if (num_bytes_to_copy > EXFATFS_MAX_FILE_NAME_SEGMENT_LENGTH_BYTE) {
+        num_bytes_to_copy = EXFATFS_MAX_FILE_NAME_SEGMENT_LENGTH_BYTE;
     }
 
-    /* If there is enough space remaining in the name object, convert the
+    /* If there is enough space remaining in the name_info object, convert the
      * name chars to UTF-8 and save them. */
-    if ((size_t)(a_name_info->actual_name_length + num_chars_to_copy) < 
+    // @@@_747 This check is wrong and I'm not sure it is needed.  If MAXNAMLEN_UTF8 is
+    // correct, then we should just copy it in.   It is wrong because it is comparing
+    // number of bytes for UTF-16 versus number of bytes for UTF-8.
+    if ((size_t)(a_name_info->actual_name_length_bytes + num_bytes_to_copy) < 
         a_name_info->fs_name->name_size - 1) {
+        
+        //@@@_747 we are specifying UTF16 in bytes here
         if (fatfs_utf16_inode_str_2_utf8(a_name_info->fatfs, 
-            (UTF16*)dentry->utf16_name_chars, num_chars_to_copy,
-            (UTF8*)&(a_name_info->fs_name->name[a_name_info->actual_name_length]), 
-            a_name_info->fs_name->name_size,
+            (UTF16*)dentry->utf16_name_chars, num_bytes_to_copy,
+            (UTF8*)&(a_name_info->fs_name->name[a_name_info->actual_name_length_bytes]),
+                                         // @@@_747: The offset into fs_name->name should be based on an index
+                                         // into fs_name->name, not how many bytes have been read from the
+                                         // dentry so far.
+            a_name_info->fs_name->name_size, /// @@@_747 Bug. should be name_size minus an offset
             a_inum, "file name segment") != TSKconversionOK) {
             /* Discard whatever was written by the failed conversion and save
              * whatever has been found to this point, if anything. */
-            a_name_info->fs_name->name[a_name_info->actual_name_length] = '\0';
+            a_name_info->fs_name->name[a_name_info->actual_name_length_bytes] = '\0';
             exfatfs_add_name_to_dir_and_reset_info(a_name_info);
             return;
         }
 
         /* Update the actual name length and null-terminate the name so far. */
-        a_name_info->actual_name_length += num_chars_to_copy;
-        a_name_info->fs_name->name[a_name_info->actual_name_length] = '\0';
+        a_name_info->actual_name_length_bytes += num_bytes_to_copy;
+        a_name_info->fs_name->name[a_name_info->actual_name_length_bytes] = '\0';
     }
 
     /* If all of the secondary entries for the set are present, save the name,
@@ -347,7 +357,8 @@ exfats_parse_vol_label_dentry(EXFATFS_FS_NAME_INFO *a_name_info, FATFS_DENTRY *a
 
     if(exfatfs_get_alloc_status_from_type(dentry->entry_type) == 1){
         if (fatfs_utf16_inode_str_2_utf8(a_name_info->fatfs, 
-            (UTF16*)dentry->volume_label, (size_t)dentry->utf16_char_count + 1, 
+            (UTF16*)dentry->volume_label, (size_t)dentry->volume_label_length_chars + 1,
+                                         // @@@_747: Note this is number of chars
             (UTF8*)a_name_info->fs_name->name, a_name_info->fs_name->name_size,
             a_inum, "volume label") != TSKconversionOK) {
             /* Discard whatever was written by the failed conversion. */
@@ -359,11 +370,11 @@ exfats_parse_vol_label_dentry(EXFATFS_FS_NAME_INFO *a_name_info, FATFS_DENTRY *a
         strcpy(a_name_info->fs_name->name, EXFATFS_EMPTY_VOLUME_LABEL_DENTRY_NAME);
     }
 
-    a_name_info->actual_name_length += dentry->utf16_char_count;
-    a_name_info->fs_name->name[a_name_info->actual_name_length] = '\0';
+    a_name_info->actual_name_length_bytes += dentry->volume_label_length_chars;
+    a_name_info->fs_name->name[a_name_info->actual_name_length_bytes] = '\0';
 
     tag_length = strlen(tag);
-    if ((size_t)a_name_info->actual_name_length + tag_length < 
+    if ((size_t)a_name_info->actual_name_length_bytes + tag_length < 
         FATFS_MAXNAMLEN_UTF8) {
         strcat(a_name_info->fs_name->name, tag);
     }

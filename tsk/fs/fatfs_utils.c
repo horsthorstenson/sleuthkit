@@ -244,16 +244,20 @@ fatfs_cleanup_ascii(char *str)
  * supplied by the caller.
  *
  * @param a_fatfs Generic FAT file system info structure.
- * @param a_src The UTF-16 string.
- * @param a_src_len The length of the UTF-16 string.
+ * @param a_src The UTF-16 string to convert
+ * @param a_src_len The number of UTF16 items in a_src
  * @param a_dest The buffer for the UTF-8 string.
- * @param a_dest_len The length of the UTF-8 string buffer.
+ * @param a_dest_len The number of bytes in a_dest
  * @param a_inum The address of the source inode, used if an error message is
  * generated.
  * @param a_desc A description of the source string, used if an error message 
  * is generated.
  * @return TSKConversionResult.
  */
+// @@@_747: We should verify that a_dest is updated to reflect the end of
+// where it actually stopped writing.  That is the behavior of tsk_UTF16toUTF8()
+// and we should document that accordingly so that callers know where to write
+// to next.
 TSKConversionResult
 fatfs_utf16_inode_str_2_utf8(FATFS_INFO *a_fatfs, UTF16 *a_src, size_t a_src_len, UTF8 *a_dest, size_t a_dest_len, TSK_INUM_T a_inum, const char *a_desc)
 {
@@ -295,7 +299,9 @@ fatfs_utf16_inode_str_2_utf8(FATFS_INFO *a_fatfs, UTF16 *a_src, size_t a_src_len
 
     conv_result = tsk_UTF16toUTF8(fs->endian, (const UTF16**)&a_src, (UTF16*)&a_src[a_src_len], &a_dest, (UTF8*)&a_dest[a_dest_len], TSKlenientConversion);
     if (conv_result == TSKconversionOK) {
-        /* Make sure the result is NULL-terminated. */
+        /* Make sure the result is NULL-terminated. *
+         * a_dest should point to byte after it stopped writing to */
+        // @@@_747 This looks wrong. a_dest won't be bigger than a_dest+X
         if ((uintptr_t) a_dest > (uintptr_t)a_dest + sizeof(a_dest)) {
             a_dest[sizeof(a_dest) - 1] = '\0';
         }
@@ -313,6 +319,7 @@ fatfs_utf16_inode_str_2_utf8(FATFS_INFO *a_fatfs, UTF16 *a_src, size_t a_src_len
     /* Clean up non-ASCII characters since the destination buffer is supposed 
      * to be UTF-8 and the encoding of the source is essentially unknown and 
      * may be junk. */
+    // @@@_747: This looks wrong. a_dest was updated to be the end
     fatfs_cleanup_ascii((char*)a_dest);
 
     /* Remove control characters. */

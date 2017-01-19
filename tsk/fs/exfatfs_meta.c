@@ -128,7 +128,7 @@ exfatfs_is_vol_label_dentry(FATFS_DENTRY *a_dentry, FATFS_DATA_UNIT_ALLOC_STATUS
 
     if(exfatfs_get_alloc_status_from_type(dentry->entry_type) == 1){
         /* There is supposed to be a label, check its length. */
-        if ((dentry->utf16_char_count < 1) || (dentry->utf16_char_count > EXFATFS_MAX_VOLUME_LABEL_LEN)) {
+        if ((dentry->volume_label_length_chars < 1) || (dentry->volume_label_length_chars > EXFATFS_MAX_VOLUME_LABEL_LEN_CHAR)) {
             if (tsk_verbose) {
                 fprintf(stderr, "%s: incorrect volume label length\n", func_name);
             }
@@ -138,7 +138,7 @@ exfatfs_is_vol_label_dentry(FATFS_DENTRY *a_dentry, FATFS_DATA_UNIT_ALLOC_STATUS
     else {
         /* There is supposed to be no label, check for a zero in the length
          * field. */
-        if (dentry->utf16_char_count != 0x00) {
+        if (dentry->volume_label_length_chars != 0x00) {
             if (tsk_verbose) {
                 fprintf(stderr, "%s: volume label length non-zero for no label entry\n", func_name);
             }
@@ -146,7 +146,7 @@ exfatfs_is_vol_label_dentry(FATFS_DENTRY *a_dentry, FATFS_DATA_UNIT_ALLOC_STATUS
         }
 
         /* Every byte of the UTF-16 volume label string should be 0. */
-        for (i = 0; i < EXFATFS_MAX_VOLUME_LABEL_LEN * 2; ++i) {
+        for (i = 0; i < EXFATFS_MAX_VOLUME_LABEL_LEN_BYTE; ++i) {
             if (dentry->volume_label[i] != 0x00) {
                 if (tsk_verbose) {
                     fprintf(stderr, "%s: non-zero byte in label for no label entry\n", func_name);
@@ -835,7 +835,8 @@ exfatfs_copy_vol_label_inode(FATFS_INFO *a_fatfs, TSK_INUM_T a_inum, FATFS_DENTR
     /* If there is a volume label, copy it to the name field of the 
      * TSK_FS_META structure. */
     if (exfatfs_get_alloc_status_from_type(dentry->entry_type) == 1) {
-        if (fatfs_utf16_inode_str_2_utf8(a_fatfs, (UTF16*)dentry->volume_label, (size_t)dentry->utf16_char_count + 1, 
+        if (fatfs_utf16_inode_str_2_utf8(a_fatfs, (UTF16*)dentry->volume_label, (size_t)dentry->volume_label_length_chars + 1, 
+                    // @@@_747: Note that we are passing in number of chars here
             (UTF8*)a_fs_file->meta->name2->name, sizeof(a_fs_file->meta->name2->name), a_inum, "volume label") != TSKconversionOK) {
             return TSK_COR;
         }
@@ -1249,6 +1250,7 @@ exfatfs_copy_file_inode(FATFS_INFO *a_fatfs, TSK_INUM_T a_inum,
 			/* Try to save what we've got (if we found at least one file name dentry) */
 			if(name_index > 1){
 				if(fatfs_utf16_inode_str_2_utf8(a_fatfs, (UTF16 *)utf16_name, sizeof(utf16_name), 
+                            // @@@_747: Note that we are passing in number of bytes here
 					(UTF8*)a_fs_file->meta->name2->name, sizeof(a_fs_file->meta->name2->name), a_inum, "file name (partial)") != TSKconversionOK){
 						return TSK_OK; /* Don't want to disregard valid data read earlier */
 				}
@@ -1256,11 +1258,11 @@ exfatfs_copy_file_inode(FATFS_INFO *a_fatfs, TSK_INUM_T a_inum,
 			return TSK_OK;
 		}
 		fatfs_dentry_load(a_fatfs, &temp_dentry, name_inum);
-		if(stream_dentry.file_name_length * 2 - name_chars_written > 30){
+		if(stream_dentry.file_name_length_bytes * 2 - name_chars_written > 30){
 			chars_to_copy = 30;
 		}
 		else{
-			chars_to_copy = stream_dentry.file_name_length * 2 - name_chars_written;
+			chars_to_copy = stream_dentry.file_name_length_bytes * 2 - name_chars_written;
 		}
 		memcpy(utf16_name + name_chars_written, &(temp_dentry.data[2]), chars_to_copy);
 
@@ -1270,6 +1272,7 @@ exfatfs_copy_file_inode(FATFS_INFO *a_fatfs, TSK_INUM_T a_inum,
 
 	/* Copy the file name segment. */
 	if(fatfs_utf16_inode_str_2_utf8(a_fatfs, (UTF16 *)utf16_name, sizeof(utf16_name), 
+                // @@@_747: Note this is number of bytes
 		(UTF8*)a_fs_file->meta->name2->name, sizeof(a_fs_file->meta->name2->name), a_inum, "file name") != TSKconversionOK){
 			return TSK_OK; /* Don't want to disregard valid data read earlier */
 	}
@@ -1317,7 +1320,8 @@ exfatfs_copy_file_name_inode(FATFS_INFO *a_fatfs, TSK_INUM_T a_inum,
     }
 
     /* Copy the file name segment. */
-    if (fatfs_utf16_inode_str_2_utf8(a_fatfs, (UTF16*)dentry->utf16_name_chars, EXFATFS_MAX_FILE_NAME_SEGMENT_LENGTH, 
+    if (fatfs_utf16_inode_str_2_utf8(a_fatfs, (UTF16*)dentry->utf16_name_chars, EXFATFS_MAX_FILE_NAME_SEGMENT_LENGTH_CHAR, 
+                // @@@_747: Note this is number of chars
         (UTF8*)a_fs_file->meta->name2->name, sizeof(a_fs_file->meta->name2->name), a_inum, "file name segment") != TSKconversionOK) {
         return TSK_COR;
     }

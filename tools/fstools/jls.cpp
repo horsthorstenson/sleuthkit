@@ -89,6 +89,7 @@ main(int argc, char **argv1)
                 exit(1);
             }
             fstype = tsk_fs_type_toid(OPTARG);
+            
             if (fstype == TSK_FS_TYPE_UNSUPP) {
                 TFPRINTF(stderr,
                     _TSK_T("Unsupported file system type: %s\n"), OPTARG);
@@ -155,7 +156,6 @@ main(int argc, char **argv1)
             img->close(img);
             exit(1);
         }
-
         inum = fs->journ_inum;
     }
     else {
@@ -165,7 +165,6 @@ main(int argc, char **argv1)
             tsk_error_print(stderr);
             exit(1);
         }
-
         if ((fs = tsk_fs_open_img(img, imgaddr * img->sector_size, fstype)) == NULL) {
             tsk_error_print(stderr);
             if (tsk_error_get_errno() == TSK_ERR_FS_UNSUPTYPE)
@@ -193,6 +192,7 @@ main(int argc, char **argv1)
     }
 
     if (inum < fs->first_inum) {
+        tsk_fprintf(stderr, "Im here lel \n");
         tsk_fprintf(stderr,
             "Inode value is too small for image (%" PRIuINUM ")\n",
             fs->first_inum);

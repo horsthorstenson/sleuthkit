@@ -473,6 +473,74 @@ typedef struct {
     uint8_t childNode[4];
 } hfs_btree_index_record;
 
+
+/************** JOURNAL ******************/
+
+/* HFS Journal Info Block */
+
+#define	kJIJournalInFSMask           0x00000001  // set in flags
+#define kJIJournalOnOtherDeviceMask  0x00000002  // set in flags
+#define kJIJournalNeedInitMask       0x00000004  // Set in flags
+
+
+typedef struct {
+    uint8_t flags[4];     // set of flags
+    uint8_t dev_sig[32];  // information about extern device	
+    uint8_t offs[8];	  // offset from start of device	
+    uint8_t size[8];	  // size of journal header + journal buffer	
+    uint8_t res[128];	  // reserved	
+} hfs_journ_sb;
+
+#define JOURNAL_HEADER_MAGIC  0x4a4e4c78
+#define ENDIAN_MAGIC          0x12345678
+
+typedef struct {
+    uint8_t magic[4]; 	 // integrity check
+    uint8_t endian[4];	 // integrity check
+    uint8_t start[8]; 	 // offset from start of journal header to first transaction
+    uint8_t end[8];		 // offset from start of journal header to last transaction
+    uint8_t size[8];  	 // size of journal header + journal buffer
+    uint8_t blhdr_size[4];  // size of one block list header
+    uint8_t checksum[4];    // checksum of journal header
+    uint8_t jhdr_size[4];	  // size of journal header	
+} hfs_journal_header;
+
+typedef struct{
+    uint8_t bnum[8];  // sectorn number
+    uint8_t bsize[4]; // number of bytes to be copied from the journal buffer to the above sector number
+    uint8_t next[4];  // used while in memory (on disk no meaning)
+} j_block_info;
+
+typedef struct{
+    uint8_t max_blocks[2];  // max. number of blocks this block list can describe
+    uint8_t num_blocks[2];  // number of elements in "binfo" array
+    uint8_t bytes_used[4];  // nuTSK_FS_INFOmber of bytes oppucpied in the journal for this block list
+    uint8_t checksum[4];    // checksum of block list header
+    uint8_t pad[4];         // alignment padding  
+    j_block_info  binfo[1];  // variable-sized array of blocks	
+} j_block_list_header;
+
+/* Journal Info */
+typedef struct {
+
+	TSK_FS_FILE *fs_file;
+    TSK_INUM_T j_inum;
+
+    uint64_t journal_size;
+            
+    uint64_t start; 		//offset in Bytes to oldest transaction 
+    uint64_t end;			//offset in bytes to newest transaction
+	uint32_t blhdr_size;
+	uint32_t jhdr_size; 
+	 
+        
+} HFS_JINFO;
+
+
+
+/********************************/
+
+
 /***************** ATTRIBUTES FILE ******************************/
 
 typedef struct {
@@ -673,6 +741,8 @@ typedef struct {
     unsigned char has_extents_file;     // and also the Bad Blocks file
     unsigned char has_startup_file;
     unsigned char has_attributes_file;
+	
+	HFS_JINFO *jinfo;
 
 } HFS_INFO;
 
@@ -726,16 +796,6 @@ typedef struct {
     uint8_t reserved[4];        // handle to resource
 } hfs_resource_refListItem;
 
-/************** JOURNAL ******************/
-
-/* HFS Journal Info Block */
-typedef struct {
-    uint8_t flags[4];
-    uint8_t dev_sig[32];
-    uint8_t offs[8];
-    uint8_t size[8];
-    uint8_t res[128];
-} hfs_journ_sb;
 
 
 
@@ -773,6 +833,9 @@ extern uint8_t hfs_cat_file_lookup(HFS_INFO * hfs, TSK_INUM_T inum,
     HFS_ENTRY * entry, unsigned char follow_hard_link);
 extern void error_returned(char *errstr, ...);
 extern void error_detected(uint32_t errnum, char *errstr, ...);
+
+//Tobi
+int8_t hfs_block_is_alloc(HFS_INFO * hfs, TSK_DADDR_T a_addr);
 
 /**
  * @param hfs

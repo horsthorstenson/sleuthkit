@@ -4729,7 +4729,8 @@ hfs_load_attrs(TSK_FS_FILE * fs_file)
 * @param b Block address 
 * @returns 1 if allocated, 0 if not, -1 on error
 */
-static int8_t
+//static 
+int8_t
 hfs_block_is_alloc(HFS_INFO * hfs, TSK_DADDR_T a_addr)
 {
     TSK_FS_INFO *fs = &(hfs->fs_info);
@@ -6057,7 +6058,9 @@ hfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
 
     fs->img_info = img_info;
     fs->offset = offset;
-
+	
+	
+	
     /*
      * Read the superblock.
      */
@@ -6076,7 +6079,9 @@ hfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
         tsk_fs_free((TSK_FS_INFO *)hfs);
         return NULL;
     }
-
+	
+	
+	
     /*
      * Verify we are looking at an HFS+ image
      */
@@ -6096,6 +6101,8 @@ hfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
      * Handle an HFS-wrapped HFS+ image, which is a HFS volume that contains
      * the HFS+ volume inside of it. 
      */
+    
+    
     if (tsk_getu16(fs->endian, hfs->fs->signature) == HFS_VH_SIG_HFS) {
 
         hfs_mdb *wrapper_sb = (hfs_mdb *) hfs->fs;
@@ -6335,8 +6342,9 @@ hfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
     fs->jentry_walk = hfs_jentry_walk;
     fs->jopen = hfs_jopen;
     fs->name_cmp = hfs_name_cmp;
-    fs->journ_inum = 0;
-
+    fs->journ_inum = tsk_getu32(fs->endian, hfs->fs->jinfo_blk);
+    
+    
     /* Creation Times */
 
     // First, the root

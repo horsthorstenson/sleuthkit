@@ -48,44 +48,31 @@ hfs_test_checksum_jblock(j_block_list_header* ptr)
 }
 
 /*
-void hfs_hex_print(char* inp, unsigned int len)
-{
-	tsk_fprintf(stderr, "\n ------------------------------------- \n");
-	tsk_fprintf(stderr, "Offset \t data \n");
-	for(int i = 0; i < len; i++){
-		if(i % 32 == 0){
-		tsk_fprintf(stderr,"\n %u: \t \t ", i);
-		}
-		tsk_fprintf(stderr," %x ", inp[i]);
-	}
-}
-
-
-void hfs_hex_print_j_block_list_header(char* inp)
-{
-	for(int i = 0; i< sizeof(j_block_list_header);i++){
-			
-			tsk_fprintf(stderr, "Journal List Header: \n");
-			tsk_fprintf(stderr, " %x ", inp[i]);
-			if(i == 1 || i == 3 || i == 7 || i == 11 || i == 15 || i == 23 || i == 27 || i == 31){
-					tsk_fprintf(stderr, " \n");
-				}
-	}
-	tsk_fprintf(stderr, "----------------------------- \n");
-}
-
-
-*/
+ * Process the Journal Info Block
+ */ 
 
 static TSK_WALK_RET_ENUM  load_jinfoblock_action (const TSK_FS_BLOCK *
 								a_block, void *a_ptr)
 {		
 						
-		memcpy(a_ptr, a_block->buf, sizeof(hfs_journ_sb));
+		TSK_FS_INFO * fs = a_block->fs_info;
+		HFS_INFO * hfs = (HFS_INFO *) fs;
+		HFS_JINFO * jinfo  = hfs->jinfo;
+		
+		hfs_journ_sb * j_sb = (hfs_journ_sb *)a_block->buf;
+		
+		jinfo->j_inum = tsk_getu64(fs->endian, j_sb->offs)/fs->block_size;
+		jinfo->journal_size = tsk_getu64(fs->endian, j_sb->size);   
+				
+		//memcpy(a_ptr, a_block->buf, sizeof(hfs_journ_sb));
 				
 		return TSK_WALK_STOP;	
 }
 
+/*
+ *  Print selected Journal Block to STDOUT
+ */ 
+ 
 static TSK_WALK_RET_ENUM  load_jblockwrite_action (const TSK_FS_BLOCK *
 								a_block, void *a_ptr)
 {		
@@ -106,7 +93,10 @@ static TSK_WALK_RET_ENUM  load_jblockwrite_action (const TSK_FS_BLOCK *
 		return TSK_WALK_STOP;	
 }
 
-
+/*
+ *  Load the Journal Buffer into own Buffer with beginning at start
+ *  block and skipping the Journal Header.
+ */ 
 
 static TSK_WALK_RET_ENUM  load_jloader_action (const TSK_FS_BLOCK *
 								a_block, void *a_ptr)
@@ -124,12 +114,7 @@ static TSK_WALK_RET_ENUM  load_jloader_action (const TSK_FS_BLOCK *
 		
 		uint64_t start_off = jinfo->start;		 
 		uint64_t buff_end = jinfo->journal_size;
-		uint32_t jhdr_size = jinfo->jhdr_size;
-										
-		uint64_t round_off = ((a_block->addr - hfs->jinfo->j_inum + 1) * 
-								fs->block_size) - jhdr_size;
-		
-					
+								
 		//first block
 		if((start_off - block_off) < fs->block_size){
 			//intern split first block 
@@ -168,27 +153,24 @@ static TSK_WALK_RET_ENUM  load_jloader_action (const TSK_FS_BLOCK *
 				memcpy(ptr, a_block->buf, fs->block_size);
 			}
 		}else{
-			tsk_printf(stderr, "This should not happen\n");
-			return 	TSK_WALK_STOP;
+			//this should not happen
+			return 	TSK_WALK_ERROR;
 		}
-		
-		return TSK_WALK_CONT;
-		 
+		return TSK_WALK_CONT; 
 }								
 
 
 
 /*
  * Note: Everything in the .journal file is stored in 
- * Little Endian intsead of Big Endian (fs-> endian). 
+ * Little Endian intsead of Big Endian (fs->endian). 
  */
 
 static TSK_WALK_RET_ENUM  load_jheader_action (const TSK_FS_BLOCK *
 								a_block, void *a_ptr)
 {
 		hfs_journal_header * jheader = (hfs_journal_header*)a_block->buf;	
-		hfs_journ_sb * j_sb = (hfs_journ_sb *) a_ptr;
-		
+				
 		TSK_FS_INFO * fs = a_block->fs_info;
 		HFS_INFO * hfs = (HFS_INFO *) fs;
 		HFS_JINFO * jinfo  = hfs->jinfo;
@@ -198,65 +180,49 @@ static TSK_WALK_RET_ENUM  load_jheader_action (const TSK_FS_BLOCK *
 		// clean up any error messages that are lying around
 		tsk_error_reset();
 				
-		
-		if(tsk_getu64(fs->endian, j_sb->size) != 
-									tsk_getu64(j_endian,jheader->size))
+		/*
+		 * test if journal size value from Journal header has the same 
+		 * size as the value from Journal Info Block
+		 */ 
+				
+		if(tsk_getu64(j_endian,jheader->size) != jinfo->journal_size)
 		{
 			tsk_error_reset();
-			tsk_error_set_errno(TSK_ERR_FS_MAGIC);
-			tsk_fprintf(stderr, "ERROR: size should be jinfo: % " PRIu64 
-			" but is jheader:  %" PRIu64 "\n", j_sb->size, 
-			jheader->size);
+			tsk_error_set_errno(TSK_ERR_FS_CORRUPT);
+			tsk_error_set_errstr("ERROR: Journal size should be: %"PRIu64 
+			" from Journal Info Block, but is: %" PRIu64 
+			" from Journal Header", jinfo->journal_size, 
+			tsk_getu64(j_endian,jheader->size));
 			return TSK_WALK_ERROR;
 		}
 				
+		/*
+		 *  test if the checksum is right
+		 */ 
 		
-		tsk_fprintf(stderr, "size should be jinfo: %" PRIu64 " but is jheader:  %" PRIu64 "\n", 
-				tsk_getu64(fs->endian, j_sb->size), tsk_getu64(j_endian,jheader->size));
-		
-		
-		tsk_fprintf(stderr, "Journal Header: \n");
-		
-		tsk_fprintf(stderr, "magic: %" PRIu32
-						"\n", tsk_getu32(j_endian,jheader->magic));
-		tsk_fprintf(stderr, "endian: %" PRIu32
-						"\n", tsk_getu32(j_endian,jheader->endian));
-		tsk_fprintf(stderr, "start: %" PRIu64
-						"\n", tsk_getu64(j_endian,jheader->start));
-		tsk_fprintf(stderr, "end: %" PRIu64
-						"\n", tsk_getu64(j_endian,jheader->end));				
-		tsk_fprintf(stderr, "size: %" PRIu64
-						"\n", tsk_getu64(j_endian,jheader->size));				
-		tsk_fprintf(stderr, "blhdr_size: %" PRIu32
-						"\n", tsk_getu32(j_endian,jheader->blhdr_size));				
-		tsk_fprintf(stderr, "checkcsum: %" PRIu32
-						"\n", tsk_getu32(j_endian,jheader->checksum));				
-		tsk_fprintf(stderr, "jhdr:size: %" PRIu32
-						"\n", tsk_getu32(j_endian,jheader->jhdr_size));
-		
-		
-		//check checksum
-		//Check jhdr_size, should be size of sector
+		uint32_t checksum = tsk_getu32(j_endian, jheader->checksum);
+				
+		for(int i = 0; i < 4 ; i++){
+			jheader->checksum[i] = 0;
+		}		
+		if(checksum != hfs_calc_checksum((unsigned char *)jheader, 
+										sizeof(hfs_journal_header))){
+			tsk_error_reset();
+			tsk_error_set_errno(TSK_ERR_FS_CORRUPT);
+			tsk_error_set_errstr("ERROR: Journal Header checksum is wrong");
+			return TSK_WALK_ERROR;
+		}
+			
+		/*
+		 * fill JINFO struct 
+		 */ 
 			
 		jinfo->journal_size = tsk_getu64(j_endian,jheader->size);
 		jinfo->start = tsk_getu64(j_endian, jheader->start);
 		jinfo->end = tsk_getu64(j_endian, jheader->end);
 		jinfo->blhdr_size = tsk_getu32(j_endian,jheader->blhdr_size);
 		jinfo->jhdr_size = tsk_getu32(j_endian,jheader->jhdr_size);
-		// check checksum					
-								
-		jheader->checksum[0] = 0;
-		jheader->checksum[1] = 0;
-		jheader->checksum[2] = 0;
-		jheader->checksum[3] = 0;
-		
-		unsigned int temp =
-			hfs_calc_checksum((unsigned char*)jheader, sizeof(hfs_journal_header));
-		
-		tsk_fprintf(stderr, "checksum: %u\n", temp);
-		
-		
-		
+			
 		return TSK_WALK_STOP;	
 }
 
@@ -276,68 +242,44 @@ hfs_jopen(TSK_FS_INFO * fs, TSK_INUM_T inum)
         tsk_error_set_errstr("hfs_jopen: fs is null");
         return 1;
     }  
+	if(fs->journ_inum != inum){
+		tsk_error_reset();
+        tsk_error_set_errno(TSK_ERR_FS_ARG);
+        tsk_error_set_errstr("Journal inum is unclear");
+		return 1;
+	}
 		
-	hfs->jinfo = jinfo =
-        (HFS_JINFO *) tsk_malloc(sizeof(HFS_JINFO));
+	hfs->jinfo = jinfo = (HFS_JINFO *) tsk_malloc(sizeof(HFS_JINFO));
     if (jinfo == NULL) {
         return 1;
     }
-		 	
-	//check for right inum
-	if(fs->journ_inum != inum){
-		tsk_fprintf(stderr, "This is very bad, maaan! \n");
-		return 1;
-	}
 	
 	// clean up any error messages that are lying around
     tsk_error_reset();
 	
-	unsigned int len = 0;
         
     
     /*
-     * Read the Journal Info Block at inum to get .journal block
+     * Read the Journal Info Block at inum to get .journal block number
      */     
-        
-    hfs_journ_sb * j_sb;
-		
-	len = sizeof(hfs_journ_sb);
-    tsk_fprintf(stderr, "size of journal info block: %d \n", len);
-    
-    if ((j_sb = (hfs_journ_sb *) tsk_malloc(len)) == NULL) {
-        tsk_error_set_errstr2("jopen: malloc of Journal Info Block failed");
-        tsk_fprintf(stderr, "jheader malloc failed \n");
-        return 0;
-    }
-       
-    if(tsk_fs_block_walk(fs, inum, inum, TSK_FS_BLOCK_WALK_FLAG_ALLOC, load_jinfoblock_action, (void *)j_sb)){
-		tsk_error_reset();
-		//update error?
-        tsk_error_set_errno(TSK_ERR_FS_FWALK);
-        tsk_error_set_errstr("Error journal info block");
-        free(j_sb);
-        return 1;
-    }
-    
-    
-    //calculate .journal block: byte offset / block size
-     
-    jinfo->j_inum = ((tsk_getu64(fs->endian, j_sb->offs))/ 
-						tsk_getu32(fs->endian,hfs->fs->blk_sz));
-		
-    if(tsk_fs_block_walk(fs, jinfo->j_inum, jinfo->j_inum, 
-       TSK_FS_BLOCK_WALK_FLAG_ALLOC, load_jheader_action, (void *)j_sb))
-    {
-		tsk_error_reset();
-        tsk_error_set_errno(TSK_ERR_FS_FWALK);
-        tsk_error_set_errstr("Error reading journal header block");
-        //tsk_fs_file_close(jinfo->fs_file);
-        free(j_sb);
-        return 1;
-    }
       
+    if(tsk_fs_block_walk(fs, inum, inum, TSK_FS_BLOCK_WALK_FLAG_ALLOC, 
+										load_jinfoblock_action, NULL)){
+		tsk_error_reset();
+        tsk_error_set_errno(TSK_ERR_FS_FWALK);
+        tsk_error_set_errstr("Error loading Journal Info Block");
+        return 1;
+    }
     
-    free(j_sb);   
+    /*
+     * Read the Journal Block to fill the JINFO struct
+     */     
+    		
+    if(tsk_fs_block_walk(fs, jinfo->j_inum, jinfo->j_inum, 
+       TSK_FS_BLOCK_WALK_FLAG_ALLOC, load_jheader_action, NULL)){
+        //Error msg was set in load_jheader_action
+        return 1;
+    }   
     return 0;
 }
 
@@ -358,8 +300,7 @@ hfs_jentry_walk(TSK_FS_INFO * fs, int flags, TSK_FS_JENTRY_WALK_CB action,
     tsk_error_reset();
 
 
-    if ((jinfo == NULL) || (hfs == NULL))
-    {
+    if ((jinfo == NULL) || (hfs == NULL)){
         tsk_error_reset();
         tsk_error_set_errno(TSK_ERR_FS_ARG);
         tsk_error_set_errstr("hfs_jentry_walk: journal is not open");
@@ -379,35 +320,27 @@ hfs_jentry_walk(TSK_FS_INFO * fs, int flags, TSK_FS_JENTRY_WALK_CB action,
         return 1;
     }
 		
-	//TSK_DADDR_T start = jinfo->j_inum;
 	TSK_DADDR_T start = jinfo->start / fs->block_size + jinfo->j_inum;
 	TSK_DADDR_T end = (jinfo->j_inum + (jinfo->journal_size/
 							fs->block_size)) -1;
 	
 	
-	if(tsk_fs_block_walk(fs, start, end, 
-       TSK_FS_BLOCK_WALK_FLAG_ALLOC, load_jloader_action, (void *) buffer))
-	{
+	if(tsk_fs_block_walk(fs, start, end, TSK_FS_BLOCK_WALK_FLAG_ALLOC,
+								load_jloader_action, (void *) buffer)){
 		tsk_error_reset();
-		//update error?
         tsk_error_set_errno(TSK_ERR_FS_FWALK);
-        tsk_error_set_errstr("Error loading journal into buffer");
+        tsk_error_set_errstr("Error loading Journal into buffer");
         return 1;
 	}
 	
-	if(tsk_fs_block_walk(fs, jinfo->j_inum, start-1, 
-       TSK_FS_BLOCK_WALK_FLAG_ALLOC, load_jloader_action, (void *) buffer))
+	if(tsk_fs_block_walk(fs, jinfo->j_inum, start-1,
+	TSK_FS_BLOCK_WALK_FLAG_ALLOC, load_jloader_action, (void *) buffer))
 	{
 		tsk_error_reset();
-		//update error?
         tsk_error_set_errno(TSK_ERR_FS_FWALK);
-        tsk_error_set_errstr("Error loading journal into buffer");
+        tsk_error_set_errstr("Error loading Journal into buffer");
         return 1;
 	}
-	
-		
-	//fwrite(buffer, jinfo->journal_size-jinfo->jhdr_size, 1, stdout);
-	
 	
 	
 	uint64_t real_offset = 0;
@@ -420,40 +353,39 @@ hfs_jentry_walk(TSK_FS_INFO * fs, int flags, TSK_FS_JENTRY_WALK_CB action,
 	uint32_t trans_count = 0; 
 	uint16_t active;
 	uint16_t blocks = 0;
+	int64_t bytes_left = 0;
 	
-	j_block_list_header * cur_header=(j_block_list_header *) &buffer[0];
+	j_block_list_header * cur_header= (j_block_list_header *) &buffer[0];
 	
 	/* 
 	 * Process the journal   つ ◕_◕ ༽つ
      */
         
     tsk_printf("JBlk\t\tDescription\n");
-    		
-	for(int i = 0; i < (jinfo->jhdr_size)/blocksize; i++){
-		tsk_printf("%" PRIuDADDR ":\tJournal Header\n", blocknumber++);
-	}
+    	
 	
-	while(offset < jinfo->journal_size){
+	while(offset < (jinfo->journal_size-jinfo->jhdr_size)){
 					
-		// check for Block List Header
-		if(hfs_test_checksum_jblock(cur_header))
-		{
-			tsk_fprintf(stderr, "checksum passen nicht, bye ! \n");
-			return 1;	
-		}
-		
-		
-		//calculate the real block number
+			
+		//calculate the intern block number
 		if(offset < jinfo->journal_size - jinfo->start){
 			blocknumber = (offset + jinfo->start) / blocksize;	
 		}else{
 			blocknumber = ((offset-(jinfo->journal_size - 
-					        jinfo->start))/blocksize) + jinfo->j_inum;
+					        jinfo->start-jinfo->jhdr_size))/blocksize);			        
 		}
+		if((blocknumber % (jinfo->journal_size / blocksize))==0){
+					blocknumber = 0;
+		}
+		
 				
 		//calculate header offset in block 
-		block_offset = (offset+start_block_offset) % blocksize; 
-				
+		if(offset <= jinfo->journal_size - jinfo->start){
+			block_offset = (offset+start_block_offset) % blocksize; 
+		}else{
+			block_offset = (offset+start_block_offset+jinfo->jhdr_size)
+														% blocksize; 
+		}		
 		//check if transaction is active or not active
 		if(offset < jinfo->journal_size - jinfo->start){
 			real_offset = offset + jinfo->start;
@@ -474,19 +406,84 @@ hfs_jentry_walk(TSK_FS_INFO * fs, int flags, TSK_FS_JENTRY_WALK_CB action,
 		}else
 				active = 1;	
 		
+		// check for Block List Header
+		if(hfs_test_checksum_jblock(cur_header))
+		{
+			//look for next Block List header or print Block as unused
+						
+			if(offset > jinfo->journal_size ){
+				return 0;
+			}
+			if(block_offset != 0 ){
+				tsk_printf("%" PRIuDADDR"(+%"PRIu32"):\t Unused \n",
+										blocknumber, block_offset);
+			}else{
+				tsk_printf("%" PRIuDADDR"\t\t Unused \n", blocknumber);
+			}			
+			
+			//check rest of block
+			bytes_left = blocksize - block_offset;
+			while(bytes_left > 0){
+				cur_header = (j_block_list_header *) &buffer[++offset];
+				if(!hfs_test_checksum_jblock(cur_header)){
+					break;	
+				}
+				bytes_left--;	
+			}
+			continue;	
+		}
+		
+		//not enough space for complete transaction
+		if(tsk_getu32(0x01, cur_header->bytes_used) > 
+										(jinfo->journal_size - offset)){
+			
+			tsk_fprintf(stderr, "Here is the end!!11 \n\n");			
+			bytes_left = jinfo->journal_size - offset;
+			while(bytes_left > 0){
+				if(block_offset != 0 ){
+				tsk_printf("%" PRIuDADDR"(+%"PRIu32"):\t Unused \n",
+										blocknumber, block_offset);
+				}else{
+					tsk_printf("%" PRIuDADDR"\t\t Unused \n", block_offset);
+				}
+				bytes_left -= blocksize - block_offset;
+				if(bytes_left <= 0){
+					return 0;
+				}
+				blocknumber++;
+				// end of buffer -> spin
+				if((blocknumber % (jinfo->journal_size / blocksize))==0){
+					blocknumber = 0;
+					block_offset = jinfo->jhdr_size;
+				}	
+			
+			}														
+		}
+		
 		//print blocks containing the journal block header	
-		for(int j = 0; j < jinfo->blhdr_size/blocksize; j++){
-			if(block_offset != 0 && j == 0){
+		bytes_left = jinfo->blhdr_size;
+		while(bytes_left > 0){
+			if(block_offset != 0){
 				tsk_printf("%" PRIuDADDR 
 				"(+%"PRIu32
 				"):\t%s Journal Block Header (Transaction: %"PRIu32
-				" )\n", blocknumber++, block_offset, 
+				" )\n", blocknumber, block_offset, 
 				(!active) ? "active" : "not active",trans_count);
+				bytes_left -= blocksize-block_offset;
+				block_offset = 0;
 			}else{
 				tsk_printf("%" PRIuDADDR 
 				":\t\t%s Journal Block Header (Transaction: %"PRIu32
-				" )\n", blocknumber++,
+				" )\n", blocknumber,
 				(!active) ? "active" : "not active", trans_count);
+				bytes_left -= blocksize;
+			}			
+			if(bytes_left >= 0){
+				blocknumber++;
+			}
+			if((blocknumber % (jinfo->journal_size / blocksize))==0){
+					blocknumber = 0;
+					block_offset = jinfo->jhdr_size;
 			}
 		}
 		
@@ -495,14 +492,20 @@ hfs_jentry_walk(TSK_FS_INFO * fs, int flags, TSK_FS_JENTRY_WALK_CB action,
 		 */
 		offset += jinfo->blhdr_size; 
 		blocks = tsk_getu16(0x01, cur_header->num_blocks);
-		int temp_size = 0;
+		
 				
 		for(int j = 1; j < blocks; j++){
-			temp_size = (int)tsk_getu32(0x01, cur_header->binfo[j].bsize);
+			bytes_left = (int)tsk_getu32(0x01, cur_header->binfo[j].bsize);
 	
-			while(temp_size >= 0){
-				block_offset = (offset+start_block_offset) % blocksize;
+			while(bytes_left > 0){
 				
+				if(offset <= jinfo->journal_size - jinfo->start){
+					block_offset = (offset+start_block_offset)
+															 %blocksize; 
+				}else{
+					block_offset = (offset + start_block_offset +
+									     jinfo->jhdr_size) % blocksize; 
+				}
 				if(block_offset != 0){
 					tsk_printf("%" PRIuDADDR 
 					"(+%"PRIu32
@@ -517,37 +520,32 @@ hfs_jentry_walk(TSK_FS_INFO * fs, int flags, TSK_FS_JENTRY_WALK_CB action,
 					(!active) ? "active" : "not active",
 					tsk_getu64(0x01, cur_header->binfo[j].bnum));
 				}
-															
-				//int test = blocksize -block_offset - temp_size;
-				//if((test) < 0){
-				
-				if((blocksize - block_offset) < temp_size){
-					//more than one block
-					if(block_offset != 0){
-						temp_size -= (blocksize - block_offset);
-						offset += (blocksize - block_offset);	
-					}else{
-						temp_size -= blocksize;
-						offset += blocksize;						
-					}
+							
+				if((blocksize - block_offset) < bytes_left){
+					//more than one block	
+					offset += (blocksize - block_offset);	
 				}else{
 					//fits in one block
-					offset += temp_size;
-					temp_size = -1;	
+					offset += bytes_left;	
 				}
-				if(temp_size < 0){
+				bytes_left -= (blocksize - block_offset);
+				if(bytes_left < 0){
 					//next action
 					continue;
 				}else{
 					blocknumber++;
+					if((blocknumber % (jinfo->journal_size
+													  /blocksize))==0){
+					blocknumber = 0;
+					block_offset = jinfo->jhdr_size;
+					}
 				}							
 			}
 			
 		} 
 		
-		trans_count++;
-		tsk_fprintf(stderr, "new offset: %d", offset);					
-		cur_header = &buffer[offset];
+		trans_count++;				
+		cur_header = (j_block_list_header *) &buffer[offset];
 	}
 	
     return 0;
@@ -589,7 +587,7 @@ hfs_jblk_walk(TSK_FS_INFO * fs, TSK_DADDR_T start, TSK_DADDR_T end,
     
     int last_jblock = (jinfo->journal_size / fs->block_size);
     
-    if (end > last_jblock){
+    if (end >= last_jblock){
         tsk_error_reset();
         tsk_error_set_errno(TSK_ERR_FS_WALK_RNG);
         tsk_error_set_errstr("hfs_jblk_walk: end block number is too big");
@@ -615,17 +613,4 @@ hfs_jblk_walk(TSK_FS_INFO * fs, TSK_DADDR_T start, TSK_DADDR_T end,
     return 0;
 }
 
-void printf_jblockheader(j_block_list_header * inp, int count){
-	
-		uint16_t blocks = tsk_getu16(0x01, inp->num_blocks);
-		uint32_t size = 0;
-		tsk_fprintf(stderr,"Hallo, : %d", blocks); 
-		
-		for(int j = 1; j < blocks; j++){
-			
-			size = tsk_getu32(0x01, inp->binfo[j].bsize);
-			tsk_fprintf("Trans %d: Write %"PRIu32" bytes to sector %"PRIu64
-						"\n", count, size, tsk_getu64(0x01, inp->binfo[j].bnum));
-		}
-}
 

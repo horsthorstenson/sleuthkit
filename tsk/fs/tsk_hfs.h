@@ -514,7 +514,7 @@ typedef struct{
 typedef struct{
     uint8_t max_blocks[2];  // max. number of blocks this block list can describe
     uint8_t num_blocks[2];  // number of elements in "binfo" array
-    uint8_t bytes_used[4];  // nuTSK_FS_INFOmber of bytes oppucpied in the journal for this block list
+    uint8_t bytes_used[4];  // number of bytes oppucpied in the journal for this block list
     uint8_t checksum[4];    // checksum of block list header
     uint8_t pad[4];         // alignment padding  
     j_block_info  binfo[1];  // variable-sized array of blocks	
